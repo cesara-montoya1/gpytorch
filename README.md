@@ -100,7 +100,7 @@ Where:
 ### References
 
 - **GPyTorch**: [https://github.com/cornellius-gp/gpytorch](https://github.com/cornellius-gp/gpytorch)
-- **SVGP Paper**: Hensman et al. (2013) - "Gaussian Processes for Big Data"
+- **SVGP Paper**: [Hensman et al. (2013) - "Gaussian Processes for Big Data"](https://arxiv.org/abs/1309.6835)
 - **GPyTorch Examples**: [Scalable GP Regression](https://docs.gpytorch.ai/en/stable/examples/02_Scalable_Exact_GPs/index.html)
 
 ## Project Structure
