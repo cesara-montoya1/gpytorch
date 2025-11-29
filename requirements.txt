@@ -5,7 +5,7 @@ torchvision
 torchaudio
 
 # SOFA library (from GitHub)
-sofa @ git+https://github.com/Semillero-SOFA/sofa-lib.git
+git+https://github.com/Semillero-SOFA/sofa-lib.git
 
 # Other dependencies
 gpytorch
