@@ -55,14 +55,53 @@ python scripts/evaluate.py --subfolder "0km_0dBm" --subsample 0.26
 - `--subsample`: Same fraction used during training
 - `--limit`: (Optional) Limit number of test samples
 
-## Model Architecture
-- **Type**: Variational Gaussian Process (Sparse GP)
-- **Inducing Points**: 500 (learnable)
-- **Kernel**: RBF with automatic relevance determination
-- **Likelihoods**: 
-  - Gaussian for OSNR
-  - Bernoulli for Overlap
-- **Training**: Mini-batch with ELBO loss
+## Methodology
+
+### Multi-output Gaussian Process with Variational Inference
+
+This project uses a **Sparse Variational Gaussian Process (SVGP)** for scalable multi-output regression and classification. The implementation is built on [GPyTorch](https://github.com/cornellius-gp/gpytorch), a highly efficient GP library.
+
+#### Why Variational Inference?
+
+Standard GPs have O(N³) complexity, making them infeasible for large datasets. **Sparse Variational GPs** reduce this to O(M²N) where M is the number of inducing points (M << N):
+
+- **Inducing Points**: 500 learnable pseudo-inputs that summarize the dataset
+- **Mini-batch Training**: Process data in batches (256 samples) for memory efficiency
+- **Scalability**: Linear complexity in dataset size (N)
+
+For 123M rows, this approach is **essential** - standard GP would require ~1.8 exabytes of memory!
+
+#### Multi-output Strategy
+
+We use `IndependentMultitaskVariationalStrategy` to handle two outputs:
+
+1. **OSNR (Continuous)**: Gaussian likelihood
+2. **Channel Overlap (Binary)**: Bernoulli likelihood
+
+Each task has independent kernel parameters, allowing different smoothness characteristics.
+
+#### Model Components
+
+- **Kernel**: RBF (Radial Basis Function) with automatic relevance determination
+- **Mean Function**: Constant mean per task
+- **Variational Distribution**: Cholesky parameterization for numerical stability
+- **Optimization**: ELBO (Evidence Lower Bound) with Adam optimizer
+
+#### Training Process
+
+```
+Loss = -ELBO = -(E[log p(y|f)] - KL[q(u)||p(u)])
+```
+
+Where:
+- `E[log p(y|f)]`: Expected log-likelihood (data fit)
+- `KL[q(u)||p(u)]`: KL divergence (regularization)
+
+### References
+
+- **GPyTorch**: [https://github.com/cornellius-gp/gpytorch](https://github.com/cornellius-gp/gpytorch)
+- **SVGP Paper**: Hensman et al. (2013) - "Gaussian Processes for Big Data"
+- **GPyTorch Examples**: [Scalable GP Regression](https://docs.gpytorch.ai/en/stable/examples/02_Scalable_Exact_GPs/index.html)
 
 ## Project Structure
 ```
@@ -86,6 +125,37 @@ gpytorch-test/
 - **Checkpoints**: Saved to `checkpoints/{subfolder}/mixed_gp_model.pth`
 - **Configs**: Saved to `configs/{subfolder}/training_config.json`
 - **Results**: Saved to `results/{subfolder}/evaluation_results_*.json`
+
+## Configuration Files
+
+Training automatically generates a configuration file at `configs/{subfolder}/training_config.json` with the following structure:
+
+```json
+{
+  "subfolder": "0km_0dBm",
+  "subsample": 0.26,
+  "epochs": 10,
+  "batch_size": 256,
+  "lr": 0.01,
+  "train_size": 414600,
+  "test_size": 103651,
+  "num_inducing": 500,
+  "timestamp": "2025-11-29T09:33:17.180867"
+}
+```
+
+**Fields:**
+- `subfolder`: Dataset used for training
+- `subsample`: Fraction of data used
+- `epochs`: Number of training epochs
+- `batch_size`: Mini-batch size (default: 256)
+- `lr`: Learning rate (default: 0.01)
+- `train_size`: Number of training samples
+- `test_size`: Number of test samples
+- `num_inducing`: Number of inducing points (default: 500)
+- `timestamp`: Training timestamp
+
+These files are automatically created during training and are useful for tracking experiments and reproducing results.
 
 ## Documentation
 - [README.md](README.md) - This file
