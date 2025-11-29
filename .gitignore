@@ -42,3 +42,6 @@ sofa_api.txt
 check_*.py
 inspect_*.py
 count_*.py
+
+# Agent scripts (development only)
+agent/
