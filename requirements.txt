@@ -1,5 +1,5 @@
 # PyTorch with CUDA 12.1 (compatible with CUDA 12.4 on compute nodes)
---index-url https://download.pytorch.org/whl/cu121
+--extra-index-url https://download.pytorch.org/whl/cu121
 torch
 torchvision
 torchaudio
