@@ -55,6 +55,32 @@ python scripts/evaluate.py --subfolder "0km_0dBm" --subsample 0.26
 - `--subsample`: Same fraction used during training
 - `--limit`: (Optional) Limit number of test samples
 
+### Hyperparameter Optimization
+
+Optimize model hyperparameters using Optuna:
+
+```bash
+python scripts/optimize_hyperparameters.py --n-trials 50 --subfolder "0km_0dBm" --subsample 0.1 --epochs 5
+```
+
+**Parameters:**
+- `--n-trials`: Number of optimization trials (default: 50)
+- `--subfolder`: Dataset subfolder
+- `--subsample`: Fraction of data (use smaller value for faster optimization, e.g., 0.1)
+- `--epochs`: Epochs per trial (use fewer for faster trials, e.g., 5)
+
+**Optimized Hyperparameters:**
+- `num_latents`: Number of latent GPs (2-5)
+- `num_inducing`: Number of inducing points (300-1000)
+- `lr`: Learning rate (0.001-0.1)
+- `batch_size`: Mini-batch size (128, 256, 512)
+
+**Optimization Metric**: Combined metric balancing OSNR RMSE and Overlap accuracy
+
+**Output**: Best hyperparameters saved to `configs/{subfolder}/best_hyperparameters.json`
+
+**Using Optimized Hyperparameters**: After optimization, manually update `train.py` with the best values or pass them as arguments (future enhancement).
+
 ## Methodology
 
 ### Multi-output Gaussian Process with Linear Model of Coregionalization (LMC)
