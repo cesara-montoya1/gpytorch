@@ -59,9 +59,6 @@ def train(epochs=50, batch_size=256, lr=0.01, smoke_test=False, subfolder="0km_0
         {'params': likelihood.parameters()},
     ], lr=lr)
     
-    # Marginal log likelihood for variational inference
-    mll = gpytorch.mlls.VariationalELBO(likelihood, model, num_data=train_x.size(0))
-    
     print("Starting training...")
     for epoch in range(epochs):
         epoch_loss = 0
@@ -74,9 +71,28 @@ def train(epochs=50, batch_size=256, lr=0.01, smoke_test=False, subfolder="0km_0
             
             output = model(batch_x)
             
-            # Compute loss using VariationalELBO
-            # batch_y should be (batch_size, num_tasks)
-            loss = -mll(output, batch_y.T)  # Transpose to (num_tasks, batch_size)
+            # Manual ELBO computation for LikelihoodList
+            # output is MultitaskMultivariateNormal with shape (batch, num_tasks)
+            mean = output.mean
+            var = output.variance
+            
+            # Create distributions for each task
+            dist_osnr = gpytorch.distributions.MultivariateNormal(mean[:, 0], torch.diag_embed(var[:, 0]))
+            dist_overlap = gpytorch.distributions.MultivariateNormal(mean[:, 1], torch.diag_embed(var[:, 1]))
+            
+            # Expected log probabilities
+            num_data = train_x.size(0)
+            scale = num_data / batch_x.size(0)
+            
+            log_prob_osnr = likelihood.likelihoods[0].expected_log_prob(batch_y[:, 0], dist_osnr).sum()
+            log_prob_overlap = likelihood.likelihoods[1].expected_log_prob(batch_y[:, 1], dist_overlap).sum()
+            
+            # KL divergence
+            kl_div = model.variational_strategy.kl_divergence().sum()
+            
+            # ELBO = E[log p(y|f)] - KL
+            # We minimize -ELBO
+            loss = -(scale * (log_prob_osnr + log_prob_overlap) - kl_div)
             
             loss.backward()
             optimizer.step()
