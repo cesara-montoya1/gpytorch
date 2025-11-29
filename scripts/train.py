@@ -30,14 +30,17 @@ def train(epochs=50, batch_size=256, lr=0.01, smoke_test=False, subfolder="0km_0
     # Initialize Model
     # Inducing points: subset of training data (e.g., 500 points)
     num_inducing = 500
+    num_latents = 3  # Number of latent functions for LMC
     inducing_idx = torch.randperm(train_x.size(0))[:num_inducing]
     inducing_points = train_x[inducing_idx].clone()
     
-    model = MixedGPModel(inducing_points)
+    model = MixedGPModel(inducing_points, num_latents=num_latents, num_tasks=2)
     
-    # Likelihoods
-    likelihood_osnr = gpytorch.likelihoods.GaussianLikelihood()
-    likelihood_overlap = gpytorch.likelihoods.BernoulliLikelihood()
+    # Likelihoods - use LikelihoodList for mixed outputs
+    likelihood = gpytorch.likelihoods.LikelihoodList(
+        gpytorch.likelihoods.GaussianLikelihood(),  # OSNR (task 0)
+        gpytorch.likelihoods.BernoulliLikelihood()  # Overlap (task 1)
+    )
     
     # Move to GPU if available
     if torch.cuda.is_available():
@@ -46,21 +49,18 @@ def train(epochs=50, batch_size=256, lr=0.01, smoke_test=False, subfolder="0km_0
         test_x = test_x.cuda()
         test_y = test_y.cuda()
         model = model.cuda()
-        likelihood_osnr = likelihood_osnr.cuda()
-        likelihood_overlap = likelihood_overlap.cuda()
+        likelihood = likelihood.cuda()
     
     model.train()
-    likelihood_osnr.train()
-    likelihood_overlap.train()
+    likelihood.train()
     
     optimizer = torch.optim.Adam([
         {'params': model.parameters()},
-        {'params': likelihood_osnr.parameters()},
-        # Bernoulli likelihood has no parameters usually, but good practice
+        {'params': likelihood.parameters()},
     ], lr=lr)
     
-    # MLLs
-    # We manually compute the loss: - (E[log p(y1|f1)] + E[log p(y2|f2)] - KL)
+    # Marginal log likelihood for variational inference
+    mll = gpytorch.mlls.VariationalELBO(likelihood, model, num_data=train_x.size(0))
     
     print("Starting training...")
     for epoch in range(epochs):
@@ -73,30 +73,10 @@ def train(epochs=50, batch_size=256, lr=0.01, smoke_test=False, subfolder="0km_0
             optimizer.zero_grad()
             
             output = model(batch_x)
-            # Extract marginals
-            # The output mean and variance are (batch, 2)
-            # We construct univariate distributions for each task
             
-            mean = output.mean
-            var = output.variance
-            
-            dist_osnr = gpytorch.distributions.MultivariateNormal(mean[:, 0], torch.diag_embed(var[:, 0]))
-            dist_overlap = gpytorch.distributions.MultivariateNormal(mean[:, 1], torch.diag_embed(var[:, 1]))
-            
-            # Expected Log Prob
-            # We need to scale by num_data / batch_size for correct ELBO scaling
-            num_data = train_x.size(0)
-            scale = num_data / batch_x.size(0)
-            
-            log_prob_osnr = likelihood_osnr.expected_log_prob(batch_y[:, 0], dist_osnr).sum()
-            log_prob_overlap = likelihood_overlap.expected_log_prob(batch_y[:, 1], dist_overlap).sum()
-            
-            # KL Divergence
-            kl_div = model.variational_strategy.kl_divergence().sum()
-            
-            # Variational ELBO = E[log p] - KL
-            # We minimize -ELBO
-            loss = - (scale * (log_prob_osnr + log_prob_overlap) - kl_div)
+            # Compute loss using VariationalELBO
+            # batch_y should be (batch_size, num_tasks)
+            loss = -mll(output, batch_y.T)  # Transpose to (num_tasks, batch_size)
             
             loss.backward()
             optimizer.step()
@@ -113,8 +93,7 @@ def train(epochs=50, batch_size=256, lr=0.01, smoke_test=False, subfolder="0km_0
     model_path = checkpoint_dir / "mixed_gp_model.pth"
     state = {
         'model': model.state_dict(),
-        'likelihood_osnr': likelihood_osnr.state_dict(),
-        'likelihood_overlap': likelihood_overlap.state_dict(),
+        'likelihood': likelihood.state_dict(),
         'metadata': {
             'subfolder': subfolder,
             'subsample': subsample,
@@ -124,6 +103,7 @@ def train(epochs=50, batch_size=256, lr=0.01, smoke_test=False, subfolder="0km_0
             'train_size': train_x.shape[0],
             'test_size': test_x.shape[0],
             'num_inducing': num_inducing,
+            'num_latents': num_latents,
             'timestamp': datetime.now().isoformat()
         }
     }

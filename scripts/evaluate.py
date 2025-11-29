@@ -25,24 +25,25 @@ def evaluate(model_path=None, batch_size=1024, limit=None, subfolder="0km_0dBm",
     print(f"Test size: {test_x.shape}")
     
     # Load Model
-    # Check shape of inducing points from saved model? 
-    # Or just assume 500 as in train.py.
-    num_inducing = 500
-    dummy_inducing = torch.zeros(num_inducing, 2)
-    model = MixedGPModel(dummy_inducing)
+    # Load metadata to get num_latents
+    state = torch.load(model_path)
+    metadata = state.get('metadata', {})
+    num_inducing = metadata.get('num_inducing', 500)
+    num_latents = metadata.get('num_latents', 3)
     
-    # Likelihoods (Standard for prediction)
-    likelihood_osnr = gpytorch.likelihoods.GaussianLikelihood()
-    likelihood_overlap = gpytorch.likelihoods.BernoulliLikelihood()
+    dummy_inducing = torch.zeros(num_inducing, 2)
+    model = MixedGPModel(dummy_inducing, num_latents=num_latents, num_tasks=2)
+    
+    # Likelihoods - use LikelihoodList
+    likelihood = gpytorch.likelihoods.LikelihoodList(
+        gpytorch.likelihoods.GaussianLikelihood(),  # OSNR
+        gpytorch.likelihoods.BernoulliLikelihood()  # Overlap
+    )
 
     # Load state dict
     try:
-        state = torch.load(model_path)
         model.load_state_dict(state['model'])
-        likelihood_osnr.load_state_dict(state['likelihood_osnr'])
-        # Bernoulli likelihood has no state usually but safe to load if saved
-        if 'likelihood_overlap' in state:
-            likelihood_overlap.load_state_dict(state['likelihood_overlap'])
+        likelihood.load_state_dict(state['likelihood'])
     except Exception as e:
         print(f"Error loading model: {e}")
         return
@@ -51,12 +52,10 @@ def evaluate(model_path=None, batch_size=1024, limit=None, subfolder="0km_0dBm",
         test_x = test_x.cuda()
         test_y = test_y.cuda()
         model = model.cuda()
-        likelihood_osnr = likelihood_osnr.cuda()
-        likelihood_overlap = likelihood_overlap.cuda()
+        likelihood = likelihood.cuda()
         
     model.eval()
-    likelihood_osnr.eval()
-    likelihood_overlap.eval()
+    likelihood.eval()
     
     test_dataset = TensorDataset(test_x, test_y)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
@@ -82,20 +81,9 @@ def evaluate(model_path=None, batch_size=1024, limit=None, subfolder="0km_0dBm",
             pred_osnr_norm = mean[:, 0]
             var_osnr_norm = var[:, 0]
             
-            # Overlap (Task 1)
-            # Latent mean -> Sigmoid -> Probability
-            # BernoulliLikelihood does this.
-            # But we can just take the mean and pass through sigmoid/probit.
-            # `likelihood_overlap(output)` would give us the marginals?
-            # `BernoulliLikelihood` expects a MultivariateNormal (latent function).
-            # We have to split the output.
-            
+            # Overlap (Task 1) - use likelihood to get probabilities
             dist_overlap = gpytorch.distributions.MultivariateNormal(mean[:, 1], torch.diag_embed(var[:, 1]))
-            # marginals = likelihood_overlap(dist_overlap) # This returns a Bernoulli distribution
-            # probs = marginals.mean # This is the probability p(y=1)
-            # Actually likelihood(input) returns p(y|f).
-            # For Bernoulli, the mean of the predictive distribution is the probability.
-            probs_overlap = likelihood_overlap(dist_overlap).mean
+            probs_overlap = likelihood.likelihoods[1](dist_overlap).mean
             
             all_preds_osnr.append(pred_osnr_norm.cpu().numpy())
             all_vars_osnr.append(var_osnr_norm.cpu().numpy())

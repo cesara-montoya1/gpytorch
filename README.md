@@ -57,9 +57,19 @@ python scripts/evaluate.py --subfolder "0km_0dBm" --subsample 0.26
 
 ## Methodology
 
-### Multi-output Gaussian Process with Variational Inference
+### Multi-output Gaussian Process with Linear Model of Coregionalization (LMC)
 
-This project uses a **Sparse Variational Gaussian Process (SVGP)** for scalable multi-output regression and classification. The implementation is built on [GPyTorch](https://github.com/cornellius-gp/gpytorch), a highly efficient GP library.
+This project uses a **Sparse Variational Gaussian Process (SVGP)** with **Linear Model of Coregionalization (LMC)** for scalable multi-output learning. The implementation is built on [GPyTorch](https://github.com/cornellius-gp/gpytorch), a highly efficient GP library.
+
+#### Why LMC for Correlated Outputs?
+
+The I/Q constellation features are affected by **both** degradation sources:
+- **Low OSNR** (noise) → constellation spread + centroid shifts
+- **Spectral overlap** → constellation spread + centroid shifts
+
+Since the same I/Q patterns can result from different causes, the outputs are **correlated**. LMC models this by using **shared latent functions** that are linearly combined to produce both outputs.
+
+**Key Advantage**: The model learns that certain latent patterns predict both low OSNR *and* high overlap simultaneously, capturing the joint distribution rather than treating tasks independently.
 
 #### Why Variational Inference?
 
@@ -71,19 +81,23 @@ Standard GPs have O(N³) complexity, making them infeasible for large datasets. 
 
 For 123M rows, this approach is **essential** - standard GP would require ~1.8 exabytes of memory!
 
-#### Multi-output Strategy
+#### LMC Architecture
 
-We use `IndependentMultitaskVariationalStrategy` to handle two outputs:
+**Latent Functions**: 3 shared Gaussian Processes model underlying patterns:
+- Each latent GP captures different aspects of constellation degradation
+- Tasks (OSNR, Overlap) are linear combinations of these latent functions
+- The mixing weights are learned during training
 
+**Likelihoods**:
 1. **OSNR (Continuous)**: Gaussian likelihood
 2. **Channel Overlap (Binary)**: Bernoulli likelihood
 
-Each task has independent kernel parameters, allowing different smoothness characteristics.
+Handled via `LikelihoodList` for mixed output types.
 
 #### Model Components
 
-- **Kernel**: RBF (Radial Basis Function) with automatic relevance determination
-- **Mean Function**: Constant mean per task
+- **Kernel**: RBF (Radial Basis Function) with automatic relevance determination per latent function
+- **Mean Function**: Constant mean per latent function
 - **Variational Distribution**: Cholesky parameterization for numerical stability
 - **Optimization**: ELBO (Evidence Lower Bound) with Adam optimizer
 
@@ -101,6 +115,7 @@ Where:
 
 - **GPyTorch**: [https://github.com/cornellius-gp/gpytorch](https://github.com/cornellius-gp/gpytorch)
 - **SVGP Paper**: [Hensman et al. (2013) - "Gaussian Processes for Big Data"](https://arxiv.org/abs/1309.6835)
+- **LMC Paper**: [Journel & Huijbregts (1978) - "Mining Geostatistics"](https://scholar.google.com/scholar?q=linear+model+of+coregionalization)
 - **GPyTorch Examples**: [Scalable GP Regression](https://docs.gpytorch.ai/en/stable/examples/02_Scalable_Exact_GPs/index.html)
 
 ## Project Structure
