@@ -1,0 +1,44 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Models (too large for git, transfer separately)
+# Checkpoints
+checkpoints/
+*.pth
+
+# Data (too large for git, use symlink on server)
+data/
+
+# Results
+results/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Temporary files
+*.log
+*.tmp
+sofa_api.txt
+check_*.py
+inspect_*.py
+count_*.py

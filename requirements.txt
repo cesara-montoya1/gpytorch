@@ -1,0 +1,19 @@
+# PyTorch with CUDA 12.1 (compatible with CUDA 12.4 on compute nodes)
+--index-url https://download.pytorch.org/whl/cu121
+torch
+torchvision
+torchaudio
+
+# SOFA library (from GitHub)
+sofa @ git+https://github.com/Semillero-SOFA/sofa-lib.git
+
+# Other dependencies
+gpytorch
+numpy
+pandas
+scikit-learn
+matplotlib
+openpyxl
+scipy
+tqdm
+polars

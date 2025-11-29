@@ -1,0 +1,11 @@
+{
+  "subfolder": "0km_0dBm",
+  "subsample": 0.01,
+  "epochs": 1,
+  "batch_size": 256,
+  "lr": 0.01,
+  "train_size": 414600,
+  "test_size": 103651,
+  "num_inducing": 500,
+  "timestamp": "2025-11-29T09:33:17.180867"
+}
