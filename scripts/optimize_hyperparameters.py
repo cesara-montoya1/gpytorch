@@ -11,122 +11,140 @@ import tqdm
 import json
 from pathlib import Path
 from datetime import datetime
+import gc
 
-def train_and_evaluate(num_latents, num_inducing, lr, batch_size, epochs, subfolder, subsample):
+def train_and_evaluate(num_latents, num_inducing, lr, batch_size, epochs, train_x, train_y, val_x, val_y, scaler_y):
     """
     Train model with given hyperparameters and return validation metrics.
     """
-    # Load Data
-    train_x, train_y, test_x, test_y, scaler_x, scaler_y = load_dataset(
-        subfolder=subfolder, 
-        subsample_fraction=subsample
-    )
-    
-    # Split training data into train/val (80/20)
-    n_train = int(0.8 * train_x.size(0))
-    indices = torch.randperm(train_x.size(0))
-    train_idx = indices[:n_train]
-    val_idx = indices[n_train:]
-    
-    val_x = train_x[val_idx]
-    val_y = train_y[val_idx]
-    train_x = train_x[train_idx]
-    train_y = train_y[train_idx]
-    
-    # Create DataLoader
-    train_dataset = TensorDataset(train_x, train_y)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    
-    # Initialize Model
-    inducing_idx = torch.randperm(train_x.size(0))[:num_inducing]
-    inducing_points = train_x[inducing_idx].clone()
-    
-    model = MixedGPModel(inducing_points, num_latents=num_latents, num_tasks=2)
-    
-    # Likelihoods
-    likelihood = gpytorch.likelihoods.LikelihoodList(
-        gpytorch.likelihoods.GaussianLikelihood(),
-        gpytorch.likelihoods.BernoulliLikelihood()
-    )
-    
-    # Move to GPU if available
-    if torch.cuda.is_available():
-        train_x = train_x.cuda()
-        train_y = train_y.cuda()
-        val_x = val_x.cuda()
-        val_y = val_y.cuda()
-        model = model.cuda()
-        likelihood = likelihood.cuda()
-    
-    model.train()
-    likelihood.train()
-    
-    optimizer = torch.optim.Adam([
-        {'params': model.parameters()},
-        {'params': likelihood.parameters()},
-    ], lr=lr)
-    
-    # Training loop
-    for epoch in range(epochs):
-        pbar = tqdm.tqdm(train_loader, desc=f"Trial Epoch {epoch+1}/{epochs}", leave=False)
-        for batch_x, batch_y in pbar:
-            if torch.cuda.is_available():
-                batch_x = batch_x.cuda()
-                batch_y = batch_y.cuda()
-            
-            optimizer.zero_grad()
-            output = model(batch_x)
-            
-            mean = output.mean
-            var = output.variance
-            
-            dist_osnr = gpytorch.distributions.MultivariateNormal(mean[:, 0], torch.diag_embed(var[:, 0]))
-            dist_overlap = gpytorch.distributions.MultivariateNormal(mean[:, 1], torch.diag_embed(var[:, 1]))
-            
-            num_data = train_x.size(0)
-            scale = num_data / batch_x.size(0)
-            
-            log_prob_osnr = likelihood.likelihoods[0].expected_log_prob(batch_y[:, 0], dist_osnr).sum()
-            log_prob_overlap = likelihood.likelihoods[1].expected_log_prob(batch_y[:, 1], dist_overlap).sum()
-            
-            kl_div = model.variational_strategy.kl_divergence().sum()
-            loss = -(scale * (log_prob_osnr + log_prob_overlap) - kl_div)
-            
-            loss.backward()
-            optimizer.step()
-            
-            pbar.set_postfix({'loss': loss.item()})
-    
-    # Validation
-    model.eval()
-    likelihood.eval()
-    
-    with torch.no_grad():
-        output = model(val_x)
-        mean = output.mean
-        var = output.variance
+    try:
+        # Create DataLoader
+        train_dataset = TensorDataset(train_x, train_y)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         
-        # OSNR predictions
-        pred_osnr_norm = mean[:, 0].cpu().numpy()
-        target_osnr_norm = val_y[:, 0].cpu().numpy()
+        # Initialize Model
+        # Ensure we don't request more inducing points than available data
+        actual_num_inducing = min(num_inducing, train_x.size(0))
+        inducing_idx = torch.randperm(train_x.size(0))[:actual_num_inducing]
+        inducing_points = train_x[inducing_idx].clone()
         
-        # Inverse transform
-        pred_osnr = scaler_y.inverse_transform(pred_osnr_norm.reshape(-1, 1)).flatten()
-        target_osnr = scaler_y.inverse_transform(target_osnr_norm.reshape(-1, 1)).flatten()
+        model = MixedGPModel(inducing_points, num_latents=num_latents, num_tasks=2)
         
-        # Overlap predictions
-        dist_overlap = gpytorch.distributions.MultivariateNormal(mean[:, 1], torch.diag_embed(var[:, 1]))
-        probs_overlap = likelihood.likelihoods[1](dist_overlap).mean.cpu().numpy()
-        pred_overlap = (probs_overlap > 0.5).astype(float)
-        target_overlap = val_y[:, 1].cpu().numpy()
+        # Likelihoods
+        likelihood = gpytorch.likelihoods.LikelihoodList(
+            gpytorch.likelihoods.GaussianLikelihood(),
+            gpytorch.likelihoods.BernoulliLikelihood()
+        )
         
-        # Metrics
-        rmse_osnr = np.sqrt(mean_squared_error(target_osnr, pred_osnr))
-        acc_overlap = accuracy_score(target_overlap, pred_overlap)
-    
-    return rmse_osnr, acc_overlap
+        # Move to GPU if available
+        if torch.cuda.is_available():
+            model = model.cuda()
+            likelihood = likelihood.cuda()
+            # Note: Data tensors are already on GPU if passed that way, or we move them here if not
+            if train_x.device.type != 'cuda':
+                train_x = train_x.cuda()
+                train_y = train_y.cuda()
+                val_x = val_x.cuda()
+                val_y = val_y.cuda()
+        
+        model.train()
+        likelihood.train()
+        
+        optimizer = torch.optim.Adam([
+            {'params': model.parameters()},
+            {'params': likelihood.parameters()},
+        ], lr=lr)
+        
+        # Training loop
+        for epoch in range(epochs):
+            pbar = tqdm.tqdm(train_loader, desc=f"Trial Epoch {epoch+1}/{epochs}", leave=False)
+            for batch_x, batch_y in pbar:
+                if torch.cuda.is_available() and batch_x.device.type != 'cuda':
+                    batch_x = batch_x.cuda()
+                    batch_y = batch_y.cuda()
+                
+                optimizer.zero_grad()
+                output = model(batch_x)
+                
+                mean = output.mean
+                var = output.variance
+                
+                dist_osnr = gpytorch.distributions.MultivariateNormal(mean[:, 0], torch.diag_embed(var[:, 0]))
+                dist_overlap = gpytorch.distributions.MultivariateNormal(mean[:, 1], torch.diag_embed(var[:, 1]))
+                
+                num_data = train_x.size(0)
+                scale = num_data / batch_x.size(0)
+                
+                log_prob_osnr = likelihood.likelihoods[0].expected_log_prob(batch_y[:, 0], dist_osnr).sum()
+                log_prob_overlap = likelihood.likelihoods[1].expected_log_prob(batch_y[:, 1], dist_overlap).sum()
+                
+                kl_div = model.variational_strategy.kl_divergence().sum()
+                loss = -(scale * (log_prob_osnr + log_prob_overlap) - kl_div)
+                
+                loss.backward()
+                optimizer.step()
+                
+                pbar.set_postfix({'loss': loss.item()})
+        
+        # Validation
+        model.eval()
+        likelihood.eval()
+        
+        with torch.no_grad():
+            # Process validation in batches to avoid OOM if validation set is large
+            val_dataset = TensorDataset(val_x, val_y)
+            val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+            
+            all_pred_osnr = []
+            all_target_osnr = []
+            all_pred_overlap = []
+            all_target_overlap = []
+            
+            for batch_val_x, batch_val_y in val_loader:
+                if torch.cuda.is_available() and batch_val_x.device.type != 'cuda':
+                    batch_val_x = batch_val_x.cuda()
+                    batch_val_y = batch_val_y.cuda()
+                
+                output = model(batch_val_x)
+                mean = output.mean
+                var = output.variance
+                
+                # OSNR predictions
+                pred_osnr_norm = mean[:, 0].cpu().numpy()
+                target_osnr_norm = batch_val_y[:, 0].cpu().numpy()
+                
+                # Inverse transform
+                pred_osnr = scaler_y.inverse_transform(pred_osnr_norm.reshape(-1, 1)).flatten()
+                target_osnr = scaler_y.inverse_transform(target_osnr_norm.reshape(-1, 1)).flatten()
+                
+                all_pred_osnr.extend(pred_osnr)
+                all_target_osnr.extend(target_osnr)
+                
+                # Overlap predictions
+                dist_overlap = gpytorch.distributions.MultivariateNormal(mean[:, 1], torch.diag_embed(var[:, 1]))
+                probs_overlap = likelihood.likelihoods[1](dist_overlap).mean.cpu().numpy()
+                pred_overlap = (probs_overlap > 0.5).astype(float)
+                target_overlap = batch_val_y[:, 1].cpu().numpy()
+                
+                all_pred_overlap.extend(pred_overlap)
+                all_target_overlap.extend(target_overlap)
+            
+            # Metrics
+            rmse_osnr = np.sqrt(mean_squared_error(all_target_osnr, all_pred_osnr))
+            acc_overlap = accuracy_score(all_target_overlap, all_pred_overlap)
+        
+        return rmse_osnr, acc_overlap
 
-def objective(trial, subfolder, subsample, epochs):
+    finally:
+        # Explicit cleanup
+        del model
+        del likelihood
+        del optimizer
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+
+def objective(trial, train_x, train_y, val_x, val_y, scaler_y, epochs):
     """
     Optuna objective function.
     """
@@ -144,8 +162,11 @@ def objective(trial, subfolder, subsample, epochs):
             lr=lr,
             batch_size=batch_size,
             epochs=epochs,
-            subfolder=subfolder,
-            subsample=subsample
+            train_x=train_x,
+            train_y=train_y,
+            val_x=val_x,
+            val_y=val_y,
+            scaler_y=scaler_y
         )
         
         # Combined metric: normalize and combine
@@ -162,6 +183,10 @@ def objective(trial, subfolder, subsample, epochs):
         
     except Exception as e:
         print(f"Trial failed with error: {e}")
+        # Clean up if failure occurred
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
         return float('inf')
 
 def optimize_hyperparameters(n_trials=50, subfolder="0km_0dBm", subsample=0.1, epochs=5):
@@ -177,6 +202,33 @@ def optimize_hyperparameters(n_trials=50, subfolder="0km_0dBm", subsample=0.1, e
     print(f"Starting hyperparameter optimization with {n_trials} trials")
     print(f"Dataset: {subfolder}, Subsample: {subsample}, Epochs: {epochs}")
     
+    # Load Data ONCE
+    print("Loading dataset...")
+    train_x, train_y, test_x, test_y, scaler_x, scaler_y = load_dataset(
+        subfolder=subfolder, 
+        subsample_fraction=subsample
+    )
+    
+    # Split training data into train/val (80/20)
+    n_train = int(0.8 * train_x.size(0))
+    indices = torch.randperm(train_x.size(0))
+    train_idx = indices[:n_train]
+    val_idx = indices[n_train:]
+    
+    val_x = train_x[val_idx]
+    val_y = train_y[val_idx]
+    train_x = train_x[train_idx]
+    train_y = train_y[train_idx]
+    
+    # Pre-move to GPU if available to save transfer time, 
+    # BUT be careful if dataset is huge. 
+    # Given the user said "depleted memory", keeping it on CPU and moving batches might be safer 
+    # if GPU memory is the bottleneck. However, if RAM is the bottleneck, moving to GPU frees RAM.
+    # Let's keep data on CPU and move batches to GPU in the loop to be safe against GPU OOM,
+    # as we have a lot of trials.
+    
+    print(f"Data loaded. Train size: {train_x.size(0)}, Val size: {val_x.size(0)}")
+    
     # Create study
     study = optuna.create_study(
         direction='minimize',
@@ -186,7 +238,15 @@ def optimize_hyperparameters(n_trials=50, subfolder="0km_0dBm", subsample=0.1, e
     
     # Optimize
     study.optimize(
-        lambda trial: objective(trial, subfolder, subsample, epochs),
+        lambda trial: objective(
+            trial, 
+            train_x=train_x, 
+            train_y=train_y, 
+            val_x=val_x, 
+            val_y=val_y, 
+            scaler_y=scaler_y, 
+            epochs=epochs
+        ),
         n_trials=n_trials,
         show_progress_bar=True
     )
