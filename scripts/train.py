@@ -62,7 +62,8 @@ def train(epochs=50, batch_size=256, lr=0.01, smoke_test=False, subfolder="0km_0
     print("Starting training...")
     for epoch in range(epochs):
         epoch_loss = 0
-        for batch_x, batch_y in tqdm.tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}"):
+        pbar = tqdm.tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")
+        for batch_x, batch_y in pbar:
             if torch.cuda.is_available():
                 batch_x = batch_x.cuda()
                 batch_y = batch_y.cuda()
@@ -98,6 +99,7 @@ def train(epochs=50, batch_size=256, lr=0.01, smoke_test=False, subfolder="0km_0
             optimizer.step()
             
             epoch_loss += loss.item()
+            pbar.set_postfix({'loss': loss.item()})
         
         avg_loss = epoch_loss / len(train_loader)
         print(f"Epoch {epoch+1}/{epochs} Loss: {avg_loss:.4f}")

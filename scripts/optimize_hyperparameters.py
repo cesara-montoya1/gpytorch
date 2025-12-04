@@ -68,7 +68,8 @@ def train_and_evaluate(num_latents, num_inducing, lr, batch_size, epochs, subfol
     
     # Training loop
     for epoch in range(epochs):
-        for batch_x, batch_y in train_loader:
+        pbar = tqdm.tqdm(train_loader, desc=f"Trial Epoch {epoch+1}/{epochs}", leave=False)
+        for batch_x, batch_y in pbar:
             if torch.cuda.is_available():
                 batch_x = batch_x.cuda()
                 batch_y = batch_y.cuda()
@@ -93,6 +94,8 @@ def train_and_evaluate(num_latents, num_inducing, lr, batch_size, epochs, subfol
             
             loss.backward()
             optimizer.step()
+            
+            pbar.set_postfix({'loss': loss.item()})
     
     # Validation
     model.eval()
